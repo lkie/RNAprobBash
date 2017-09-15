@@ -1,0 +1,254 @@
+
+<!-- saved from url=(0042)http://people.binf.ku.dk/lukasz/Guide.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252"> <title> Guide for using RNA probing software from Vinther Lab in a command-line environment </title> </head>
+<body>
+
+<h3>Guide for using RNA probing software from <a href="http://www1.bio.ku.dk/english/research/bi/rna_biologi/vinther/">Vinther Lab</a> in a command-line environment, prior to RNAprobR</h3>
+
+<dl>
+<dt><b>Date of creation:</b></dt> <dd>April 15th 2015</dd>
+<dt><b>Last modification:</b></dt> <dd><script language="Javascript">document.write(document.lastModified)</script>04/29/2015 09:12:29</dd>
+<dt><b>Author:</b></dt> <dd><a href="https://dk.linkedin.com/in/lkielpinski">Lukasz Jan Kielpinski</a></dd>
+<dt><b>Decription:</b></dt> <dd>This guide describes how to turn the link provided by sequencing center into RNAprobR 
+compatible dataset in the command line Linux environment, with the focus on the shared computing facilities. 
+It is based on <a href="http://www.sciencedirect.com/science/article/pii/S0076687915000713">
+"Reproducible Analysis of Sequencing-Based RNA Structure Probing Data with User-Friendly Tools"</a>. 
+Protocol for single read sequencing. 
+<p><i>Before using this protocol you need to customize paths and urls.</i></p></dd>
+<dt><b>Requirements: </b></dt> <dd><ul>  
+<li>Standard bash tools</li>
+<li>Functional <a href="https://code.google.com/p/cutadapt/">cutadapt</a> added to the path</li>
+<li>Functional <a href="http://bowtie-bio.sourceforge.net/bowtie2/index.shtml">bowtie2</a> added to the path</li>
+<li>Bash scripts accompanying the MiE chapter. <a href="http://people.binf.ku.dk/lukasz/Guide.html#install_scripts">Quick installation described below</a></li>
+<li><a href="http://www.r-project.org/">R</a> with the <a href="http://www.bioconductor.org/packages/release/bioc/html/RNAprobR.html">RNAprobR package</a> (only for estimating unique counts as described in <a href="http://nar.oxfordjournals.org/content/42/8/e70">HRF-Seq paper</a>)</li>
+</ul></dd>
+</dl>
+
+
+
+<h3>Protocol:</h3>
+<ol>
+	<li>If you use one of the remote servers it is the safest to work in the "screen" mode. This mode prevents termination of processes and loss of data if your terminal connection fails. 
+	<ul>
+		<li>To enter screen mode, type:
+
+			<p><code>screen</code></p></li>
+
+		<li>To reconnect to your session, type:
+
+			<p><code>screen -r</code></p></li>
+
+		<li>To end the session, type:
+
+			<p><code>exit</code></p></li>
+	</ul>
+	</li>
+	<li> Download data
+		<ol>
+			<li>You should have received the url for the sequencing data. 
+			Go to the directory of choice and download the data with "wget".
+			<ul><li>Example:</li></ul>
+
+			<p><code>cd /usr/seqdata/hrfseq/original_data<br>
+			get http://example.com/data/reads.tar.bz2</code></p></li>
+
+			<li>You will usually also receive md5sum (either present in the downloaded data or in the email). 
+			Compare md5sum of your downloaded data to provided sum.
+			<ul><li>Example:</li></ul>
+
+			<p><code>md5sum reads.tar.bz2</code></p></li>
+
+			<li>Extract the data if necessary (Aarhus seq center - it is necessary; 
+			KU seq center do not bzip the files):
+			<ul><li>Example:</li></ul>
+
+			<p><code>tar -jxvf reads.tar.bz2</code></p></li>
+
+			<li>Make sure that your data is distributed in a logical way, e.g. data is split in directories named by index number.
+			<p>For further step we have indexes from 1 to 12, FASTQ are distributed between directories named between 01 to 12 and files are gzipped and have various names.</p>
+			<ul><li>Example path: </li></ul>
+			<p><code>/usr/seqdata/hrfseq/original_data/01/reads-01_S1_L001_R1_001.fastq.gz</code></p></li>
+		</ol>
+	</li>
+	<li>Trim the adapters
+		<ol>
+			<li>Start by creating parallel directories for processed data:
+				<ul><li>Example:</li></ul>
+				<p><code>
+				mkdir /usr/seqdata/hrfseq/trimmed_adapters
+				</code></p>
+			</li> 
+			<li>Set cutadapt parameters to bash variables:
+				<ul><li>Example:</li></ul>
+				<p><code>
+				ADAPTER_SEQUENCE=AGATCGGAAGAGCACACGTCT<br>
+				QUALITY_CUTOFF=17<br>
+				MINIMAL_LENGTH=40
+				</code></p>
+				Note: by using minimal length 40 at the cutadapt step, we ensure minimal length of 21 at the mapping step (10 nt trimmed from reads left side - barcode, 9 nt trimmed from the right side - possible random part of the RT primer)
+			</li>
+			<li>Save the cutadapt version (for future reference):
+				<ul><li>Example:</li></ul>
+				<p><code>
+				cd /usr/seqdata/hrfseq/trimmed_adapters<br>
+				cutadapt --version &gt; cutadapt.version
+				</code></p>
+			</li>
+			<li>For running cutadapt on multiple indexes simultaneously use bash 'for' loop (which will be used multiple times in the guide). Inside a loop: create and enter subdirectory for each index (mkdir; cd), decompress and pipe fastq to cutadapt (zcat). After cutadapt, reads are piped on gzip and saved.
+				It is safe to run 12 jobs in parallel on our servers (48 or 64 cores). We do that by placing '&amp;' after the command which sends the process to the background and allows a new one to start. Since we do not want the next step (preprocessing) to start before all reads are processed with cutadapt, include <code>wait</code> after the loop.
+				<ul><li>Example:</li></ul>
+				<p><code>
+				for i in {01..12}<br>
+				do<br>
+				<br>
+				 mkdir /usr/seqdata/hrfseq/trimmed_adapters/$i<br>
+				 cd /usr/seqdata/hrfseq/trimmed_adapters/$i<br>
+				 zcat /usr/seqdata/hrfseq/original_data/$i/*.fastq.gz |<br>
+				 nice cutadapt --adapter=$ADAPTER_SEQUENCE --quality-cutoff=$QUALITY_CUTOFF --minimum-length=$MINIMAL_LENGTH - 2&gt; cutadapt.error |<br>
+				 gzip &gt; reads_trimmed.fastq.gz &amp;<br>
+				<br>
+				done<br>
+				wait
+				</code></p>
+			</li>
+		</ol>
+	</li>
+	<li>Run a preprocessing tool
+	<ol>
+		<li><a name="install_scripts"></a>Download scripts and decompress them in your scripts directory
+			<ul><li>Example:</li></ul>
+			<p><code>
+			mkdir /usr/scripts/mie_scripts<br>
+			cd /usr/scripts/mie_scripts<br>
+			wget http://people.binf.ku.dk/~jvinther/data/rna_probing/RNAprobBash.tar.gz<br>
+			tar -zxf RNAprobBash.tar.gz
+			</code></p>
+		</li>
+		<li>Add the scripts location to the path
+			<ul><li>Example:</li></ul>
+			<p><code>
+			PATH=$PATH:/usr/scripts/mie_scripts
+			</code></p>
+		</li>
+		<li>Run the preprocessing script. 
+			<p>Check the meaning of different parameters by typing:</p> <p><code>preprocessing.sh -h</code></p>
+			<p>It is not safe to run multiple preprocessing.sh instances simultaneously, hence do not include '&amp;'. After preprocessing, remove input files and compress output fastq to save disk space. </p>
+			<ul><li>Example:</li></ul>
+			<p><code>
+			for i in {01..12}<br>
+			do<br>
+			<br>
+			cd /usr/seqdata/hrfseq/trimmed_adapters/$i<br>
+			preprocessing.sh -b NWTRYSNNNN -t 9 -1 reads_trimmed.fastq.gz<br>
+			rm reads_trimmed.fastq.gz<br>
+			gzip ./output_dir/read1.fastq<br>
+			<br>
+			done
+			</code></p>
+		</li>
+		</ol>
+	</li>
+	<li>Mapping
+	<ol>
+		<li> Prepare fasta index
+			<p>Current version of bash scripts + RNAprobR works only in transcript coordinates, so mapping to genome is not supported. Before mapping one has to select the sequences of interest, to which reads will be mapped. This can be done in multiple ways, e.g.:</p>
+			<ol type="a">
+				<li> Sequences of a few transcripts of interest, e.g. fasta file with ribosomal sequences or with sequences of in vitro transcribed RNA molecules</li>
+				<li> Transcript collection, e.g. Rouskin et al. 2014 (DMS-Seq) used the longest isoform of all RefSeq protein coding genes, Spitale et al. 2015 (icSHAPE) mapped to ENSEMBL transcriptome.</li>
+				<li> Pre-selected transcript collection. Example: use tophat2 to map to genome using ENSEMBL gtf as a guide, do the cufflinks analysis, choose 1000 top expressed, choose the longest isoform of them</li>
+			</ol>
+			<ul><li>Example file name:</li></ul>
+			<p><code>/usr/FASTA/top_transcripts.fa</code></p>
+		</li>
+		<li> Prepare bowtie2 index. 
+			<ul><li>Example:</li></ul>
+			<p><code>
+			cd /usr/FASTA/<br>
+			bowtie2-build top_transcripts.fa top_transcripts
+			</code></p>
+		</li>
+		<li> Map to transcripts with bowtie2 
+			<p>Mapping is performed with bowtie2 program, without sending the command to the background (no "&amp;"). </p>
+			<p>Parameters used below mean: -p32 (use 32 cores for mapping), --quiet (print only serious errors to stderr - which is later saved in bowtie2.error file), 
+			--norc (do not map to reverse strand)</p>
+			<ul><li>Example:</li></ul>
+			<p><code>
+			for i in {01..12}<br>
+			do<br>
+			<br>
+			cd /usr/seqdata/hrfseq/trimmed_adapters/$i<br>
+			nice bowtie2 -p32 --quiet --norc -x /usr/FASTA/top_transcripts -U ./output_dir/read1.fastq.gz 2&gt;bowtie2.error | gzip &gt; tx_mapped.sam.gz<br>
+			<br>
+			done
+			</code></p>
+		</li>
+		<li> Save the bowtie2 version for future reference
+			<ul><li>Example:</li></ul>
+			<p><code>
+			bowtie2 --version &gt; bowtie2.version
+			</code></p>
+		</li>
+	</ol>
+	</li>
+	<li>Summarize unique barcodes 
+		<p>Count number of unique barcodes connected with reads terminating at each of the transcript nucleotides with the summarize_unique_barcodes.sh script. Check the meaning of different parameters by typing:</p> <p><code>summarize_unique_barcodes.sh -h</code></p>
+		<p>It SHOULD (no guarantee!) be safe to run 12 jobs in parallel on our servers, although very large files may be an issue<a href="http://people.binf.ku.dk/lukasz/Guide.html#note1">*</a>. To call the -k option (produce k2n file) you need RNAprobR to be installed in your R - this calculation can take very long time.</p>
+		<ul><li>Example:</li></ul>
+		<p><code>
+		for i in {01..12}<br>
+		do<br>
+		<br>
+		cd /usr/seqdata/hrfseq/trimmed_adapters/$i<br>
+		nice summarize_unique_barcodes.sh -f tx_mapped.sam.gz -b ./output_dir/barcodes.txt -t -k -o summarized &amp;<br>
+		<br>
+		done<br>
+		wait
+		</code></p>
+	</li>
+	<li>Read in the data into R session using RNAprobR package.
+		<p>If you intend to work on all 12 probing samples simultaneously it is convenient to read in the data into a list:</p>
+		<p><code>
+		cd /usr/seqdata/hrfseq/trimmed_adapters/<br>
+		R<br>
+		library(RNAprobR)<br>
+		<br>
+		dir_names &lt;- formatC(1:12, width=2, flag=0)<br>
+		<br>
+		#Read in the count information, and convert observed unique barcodes to estimated unique counts:<br>
+		euc_GRs &lt;- list()<br>
+		for(index in dir_names){<br>
+		euc_GRs[[index]] &lt;- readsamples(samples=paste("./",index,"/summarized/unique_barcodes.txt", sep=""), euc="HRF-Seq", k2n_files = paste("./",index,"/summarized/k2n.txt", sep=""))<br>
+		}<br>
+		<br>
+		#Compile positional information:<br>
+		comp_GRs &lt;- list()<br>
+		for(index in dir_names){<br>
+		comp_GRs[[index]] &lt;- comp(euc_GR=euc_GRs[[index]], fasta_file="/usr/FASTA/top_transcripts.fa")<br>
+		}<br>
+		<br>
+		#Save R objects for future fast loading with the load():<br>
+		save(euc_GRs, file="euc_GRs.Rsave")<br>
+		save(comp_GRs, file="comp_GRs.Rsave")<br>
+		<br>
+		</code></p>
+	</li>
+</ol>
+<br>
+########################################################################################################
+<a name="note1"></a><p>* It can be a good idea to include summarize_unique_barcodes.sh script in the same loop as bowtie2 mapping. In this case, instead of running code in the points 5.3 and 6 run:
+</p>
+<p>
+<code>
+for i in {01..12}<br>
+do<br>
+<br>
+cd /usr/seqdata/hrfseq/trimmed_adapters/$i<br>
+nice bowtie2 -p32 --quiet --norc -x /usr/FASTA/top_transcripts -U ./output_dir/read1.fastq.gz 2&gt;bowtie2.error | gzip &gt; tx_mapped.sam.gz<br>
+nice summarize_unique_barcodes.sh -f tx_mapped.sam.gz -b ./output_dir/barcodes.txt -t -k -o summarized &amp;<br>
+<br>
+done<br>
+wait
+</code>
+</p>
+
+</body></html>
